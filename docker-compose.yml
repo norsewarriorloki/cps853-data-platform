@@ -81,8 +81,8 @@ services:
       POSTGRES_USER: bigdata24/7
       POSTGRES_PASSWORD: BigDataAllDay
     volumes:
-      - ./data:app/data
-      - /src:/app/src:ro
+      - ./data:/app/data
+      - ./src:/app/src:ro
     command:
       - /opt/spark/bin/spark-submit
       - --master
