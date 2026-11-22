@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Generated data
+data/raw/
+data/silver/
+data/checkpoints/
+
+# Spark
+.sparkStaging/
+spark-warehouse/
+
+# System
+.DS_Store

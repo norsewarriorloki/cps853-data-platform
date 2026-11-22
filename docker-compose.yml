@@ -1,0 +1,155 @@
+name: cps853-data-platform
+
+services:
+  kafka:
+    image: apache/kafka:4.1.2
+    restart: unless-stopped
+    
+    environment:
+      KAFKA_NODE_ID: 1 
+      KAFKA_PROCESS_ROLES: broker, controller # controller required even for single broker setup
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093 
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092 # address availble to clients trying to reach the broker
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093 # single value since only one broker
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx768m"
+    
+    volumes:
+      - kafka_data:/tmp/kraft-combined-logs
+    
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+  
+  # Database service for serving analytical results
+  postgres:
+    image: postgres:12
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gold_layer_pm25
+      POSTGRES_USER: bigdata24/7
+      POSTGRES_PASSWORD: BigDataAllDay
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  
+  kafka-init:
+    image: apache/kafka:4.1.2
+    profiles: ["pipeline"]
+    restart: no
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        /opt/kafka/bin/kafka-topics.sh \
+        --bootstrap-server kafka:9092 \
+        --create --if-not-exists \
+        --topic pm25-hourly \
+        --partitions 3 \
+        --replication-factor 1
+  
+  spark-batch:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    profiles: ["pipeline"]
+    restart: no
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: gold_layer_pm25
+      POSTGRES_USER: bigdata24/7
+      POSTGRES_PASSWORD: BigDataAllDay
+    volumes:
+      - ./data:app/data
+      - /src:/app/src:ro
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[2]
+      - --driver-memory
+      - 2g
+      - --conf
+      - spark.sql.shuffle.partitions=8
+      - /app/src/spark-batch/job.py 
+  
+  consumer:
+    build:
+      context: .
+      dockerfile: docker/python/Dockerfile
+    profiles: ["pipeline"]
+    restart: unless-stopped
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: pm25-hourly
+      KAFKA_GROUP_ID: pm25-rolling-consumer
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: gold_layer_pm25
+      POSTGRES_USER: bigdata24/7
+      POSTGRES_PASSWORD: BigDataAllDay
+      PYTHONPATH: /app
+    volumes:
+      - ./src:/app/src:ro
+    command: ["python", "-m", "src.kafka-streaming.consumer"]
+    
+  producer:
+      build:
+        context: .
+        dockerfile: docker/python/Dockerfile
+      profiles: ["pipeline"]
+      restart: "no"
+      depends_on:
+        spark-batch:
+          condition: service_completed_successfully
+        kafka-init:
+          condition: service_completed_successfully
+        consumer:
+          condition: service_started
+      working_dir: /app
+      environment:
+        KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+        KAFKA_TOPIC: pm25-hourly
+        PARQUET_DIR: /app/data/silver
+        PYTHONPATH: /app
+      volumes:
+        - ./data/silver:/app/data/silver:ro
+        - ./src:/app/src:ro
+      command: ["python", "-m", "src.streaming.producer"]
+
+volumes:
+  kafka_data:
+  postgres_data:
+
+
+
+
+
+
+      

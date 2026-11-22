@@ -1,0 +1,7 @@
+confluent-kafka
+pyspark
+pandas
+sql_alchemy
+pyarrow
+psycopg[binary]
+pytest
