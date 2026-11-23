@@ -1,6 +1,7 @@
 confluent-kafka
 pyspark
 pandas
+duckdb
 sqlalchemy
 pyarrow
 psycopg[binary]

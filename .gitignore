@@ -13,6 +13,7 @@ __pycache__/
 data/raw/
 data/silver/
 data/checkpoints/
+data/rejected/
 
 # Spark
 .sparkStaging/

@@ -2,7 +2,12 @@ name: cps853-data-platform
 
 services:
   kafka:
-    image: apache/kafka:4.1.2
+    build:
+      context: .
+      dockerfile: docker/kafka/Dockerfile
+    depends_on:
+      kafka-volume-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     
     environment:
@@ -28,10 +33,20 @@ services:
       timeout: 10s
       retries: 12
       start_period: 30s
+  kafka-volume-init:
+    image: alpine:3.20
+    user: "0:0"
+    restart: "no"
+    volumes:
+      - kafka_data:/kafka-data
+    command:
+      - sh
+      - -c
+      - "mkdir -p /kafka-data && chown -R 1000:1000 /kafka-data"
   
   # Database service for serving analytical results
   postgres:
-    image: postgres:12
+    image: postgres:17
     restart: unless-stopped
     environment:
       POSTGRES_DB: gold_layer_pm25
@@ -46,6 +61,31 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+  db-init:
+    image: postgres:17
+    restart: "no"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      POSTGRES_DB: gold_layer_pm25
+      POSTGRES_USER: bigdata24/7
+      POSTGRES_PASSWORD: BigDataAllDay
+
+    volumes:
+      - ./sql:/sql:ro
+
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      for file in /sql/[0-9][0-9][0-9]_*.sql; do
+        [ -f "$$file" ] || continue
+        echo "Applying $$file"
+        psql -X -v ON_ERROR_STOP=1 --single-transaction -f "$$file"
+      done
   
   kafka-init:
     image: apache/kafka:4.1.2
@@ -69,6 +109,8 @@ services:
     build:
       context: .
       dockerfile: docker/spark/Dockerfile
+    group_add:
+      - "1000"
     profiles: ["pipeline"]
     restart: no
     depends_on:
@@ -104,6 +146,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     working_dir: /app
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -136,12 +180,14 @@ services:
       environment:
         KAFKA_BOOTSTRAP_SERVERS: kafka:9092
         KAFKA_TOPIC: pm25-hourly
-        PARQUET_DIR: /app/data/silver
         PYTHONPATH: /app
+        PARQUET_GLOB: /app/data/silver/pm25_hourly/*.parquet
+        REPLAY_SPEED: "0"
+        MAX_EVENTS: "0"
       volumes:
         - ./data/silver:/app/data/silver:ro
         - ./src:/app/src:ro
-      command: ["python", "-m", "src.streaming.producer"]
+      command: ["python", "-m", "src.kafka-streaming.producer"]
 
 volumes:
   kafka_data:

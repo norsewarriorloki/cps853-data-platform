@@ -1,83 +1,112 @@
-"""Build quality reports without filtering or changing the input DataFrame."""
+"""Validate raw measurements, split rejected rows, and build quality reports."""
 
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
+REQUIRED_FIELDS = [
+    "State Code",
+    "County Code",
+    "Site Num",
+    "POC",
+    "Parameter Code",
+    "Sample Measurement"
+]
 
-def completeness_quality(df: DataFrame) -> DataFrame:
-    return df.agg(
-        F.count("*").alias("total_rows"),
-        F.count(F.when(F.col("pm25").isNull(), 1)).alias("missing_pm25"),
+MEASUREMENT_KEY = [
+    "State Code",
+    "County Code",
+    "Site Num",
+    "Parameter Code",
+    "POC",
+    "Date GMT",
+    "Time GMT"
+]
+
+def has_invalid_required_fields() -> Column:
+    invalid = F.lit(False)
+
+    for field in REQUIRED_FIELDS:
+        column = F.col(field)
+
+        invalid = (
+            invalid
+            | column.isNull()
+            | (F.trim(column) == "")
+        )
+
+    invalid = invalid | F.col("POC").try_cast("int").isNull()
+    pm25 = F.col("Sample Measurement").try_cast("double")
+    invalid = invalid | pm25.isNull() | F.isnan(pm25)
+
+    return invalid
+
+def timestamp_violations() -> tuple[Column, Column]:
+    """Return predicates for malformed timestamps and dates outside 2024."""
+    utc_timestamp = F.try_to_timestamp(
+        F.concat_ws(
+            " ",
+            F.col("Date GMT"),
+            F.col("Time GMT")
+        ),
+        F.lit("yyyy-MM-dd HH:mm")
+    )
+
+    local_date = F.try_to_date(
+        F.col("Date Local"),
+        "yyyy-MM-dd"
+    )
+
+    valid_local_time = F.col("Time Local").rlike(
+        r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
+
+    invalid_timestamp = (
+        utc_timestamp.isNull()
+        | local_date.isNull()
+        | ~F.coalesce(valid_local_time, F.lit(False))
+    )
+
+    outside_date_range = (
+        local_date.isNotNull()
+        & (F.year(local_date) != 2024)
+    )
+
+    return invalid_timestamp, outside_date_range
+
+def flag_duplicate_measurements(df: DataFrame) -> DataFrame:
+    """Flag every row belonging to a repeated measurement key."""
+    window = Window.partitionBy(*MEASUREMENT_KEY)
+
+    return df.withColumn(
+        "is_duplicate",
+        F.count("*").over(window) > 1
     )
 
 
-def temporal_quality(df: DataFrame) -> DataFrame:
-    return df.agg(
-        F.count(F.when(F.col("event_time_utc").isNull(), 1)).alias("invalid_utc"),
-        F.count(F.when(F.col("local_date").isNull(), 1)).alias("invalid_date"),
-        F.count(
-            F.when(
-                F.col("local_hour").isNull()
-                | ~F.col("local_hour").between(0, 23),
-                1,
-            )
-        ).alias("invalid_hour"),
+def split_valid_invalid(df: DataFrame) -> tuple[DataFrame, DataFrame]:
+    """Return (valid, invalid) raw rows, retaining flags and rejection reasons.
+
+    Every row in a duplicate group is rejected, matching the existing policy.
+    Both returned DataFrames are lazy; the caller decides when to run actions.
+    """
+    flagged_df = flag_duplicate_measurements(df)
+    invalid_timestamp, outside_date_range = timestamp_violations()
+    checked_df = flagged_df.withColumn(
+        "rejection_reasons",
+        F.filter(
+            F.array(
+                F.when(has_invalid_required_fields(), "MISSING_REQUIRED"),
+                F.when(invalid_timestamp, "INVALID_TIMESTAMP"),
+                F.when(outside_date_range, "OUTSIDE_DATE_RANGE"),
+                F.when(F.col("is_duplicate"), "DUPLICATE"),
+            ),
+            lambda reason: reason.isNotNull(),
+        ),
     )
-
-
-def date_range_quality(df: DataFrame, expected_year: int = 2024) -> DataFrame:
-    return df.agg(
-        F.min("local_date").alias("earliest_date"),
-        F.max("local_date").alias("latest_date"),
-        F.count(
-            F.when(F.year("local_date") != expected_year, 1)
-        ).alias(f"outside_{expected_year}"),
-    )
-
-
-def geographic_quality(df: DataFrame) -> DataFrame:
-    return df.agg(
-        F.count(
-            F.when(
-                F.col("latitude").isNull()
-                | ~F.col("latitude").between(-90, 90),
-                1,
-            )
-        ).alias("invalid_latitude"),
-        F.count(
-            F.when(
-                F.col("longitude").isNull()
-                | ~F.col("longitude").between(-180, 180),
-                1,
-            )
-        ).alias("invalid_longitude"),
-        F.count(
-            F.when(
-                F.col("state_code").isNull() | F.col("county_code").isNull(),
-                1,
-            )
-        ).alias("missing_geographic_codes"),
-    )
-
-
-def duplicate_quality(df: DataFrame) -> DataFrame:
-    measurement_key = [
-        "state_code",
-        "county_code",
-        "site_num",
-        "parameter_code",
-        "poc",
-        "event_time_utc",
-    ]
-    duplicate_groups = (
-        df.groupBy(*measurement_key)
-        .count()
-        .filter(F.col("count") > 1)
-    )
-    return duplicate_groups.agg(
-        F.count("*").alias("duplicate_keys"),
-        F.coalesce(F.sum(F.col("count") - 1), F.lit(0)).alias("extra_rows"),
-    )
+    valid_df = checked_df.filter(F.size("rejection_reasons") == 0)
+    invalid_df = checked_df.filter(F.size("rejection_reasons") > 0)
+    return valid_df, invalid_df
 
 
 def measurement_quality(df: DataFrame) -> DataFrame:

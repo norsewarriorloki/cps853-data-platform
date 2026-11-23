@@ -1,0 +1,174 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[hidelinks]{hyperref}
+
+% Based on the Report requirements in Team_Project (4).pdf.
+% Main report: at most eight pages. An appendix is permitted if needed.
+% Submit the report PDF with the final code as a zip file.
+% Comments indicate what to add; no report content has been filled in.
+
+\title{CPS 853 Team Project Report}
+\author{} % Add team members' names.
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Design}
+% 2 marks.
+
+\subsection{Architecture Diagram}
+% Insert the architecture diagram and explain the main components/data flow.
+% Example figure structure (uncomment after adding the image):
+% \begin{figure}[htbp]
+%     \centering
+%     \includegraphics[width=\linewidth]{architecture.pdf}
+%     \caption{System architecture.}
+%     \label{fig:architecture}
+% \end{figure}
+
+\subsection{Database Choice and Alternative}
+% Compare the selected database with one alternative and justify the choice.
+
+\subsection{Changes Since the Proposal}
+% Describe any changes and give the reason for each.
+
+\section{Evidence That All Four Parts Work}
+% 3 marks. Include sample outputs, stage counts, quality-check results,
+% and the three answers with measured database response times.
+
+\subsection{Part 1: Store and Batch}
+% Show evidence of the chosen storage format and working Spark batch job.
+% Include sample outputs for at least two of the user questions.
+
+\subsection{Part 2: Stream}
+% Show evidence of event-time-ordered Kafka replay and a running consumer result.
+% Include sample producer/consumer outputs.
+
+\subsection{Part 3: Serve}
+% Show that batch and stream results are loaded into the chosen database.
+% Supply each user question, its database answer, and measured response time.
+% Expand the table or use separate query/output blocks as needed.
+
+\begin{table}[htbp]
+    \centering
+    \caption{User questions, database answers, and response times.}
+    \begin{tabularx}{\linewidth}{@{}XXX@{}}
+        \toprule
+        User question & Answer / output & Response time (ms) \\
+        \midrule
+        & & \\
+        & & \\
+        & & \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{Part 4: Quality and Monitoring}
+% Include at least four automated pipeline checks and failed-row counts.
+% Show sample check outputs and rows in/out at every pipeline stage.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Automated quality-check results.}
+    \begin{tabularx}{\linewidth}{@{}XXr@{}}
+        \toprule
+        Check & Failure criterion & Failed rows \\
+        \midrule
+        & & \\
+        & & \\
+        & & \\
+        & & \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+    \centering
+    \caption{Row counts at each pipeline stage.}
+    \begin{tabularx}{\linewidth}{@{}Xrr@{}}
+        \toprule
+        Pipeline stage & Rows in & Rows out \\
+        \midrule
+        & & \\
+        & & \\
+        & & \\
+        & & \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\section{The Deep Part}
+% 3 marks.
+
+\subsection{What Changed}
+% Identify the selected area, the baseline, and the change implemented.
+
+\subsection{Measurements Before and After}
+% Describe the measurement method and conditions; supply comparable results.
+% Add metric names and units in the table.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Measurements before and after the change.}
+    \begin{tabularx}{\linewidth}{@{}XXX@{}}
+        \toprule
+        Metric (unit) & Before & After \\
+        \midrule
+        & & \\
+        & & \\
+        & & \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{What We Learned}
+% Interpret the measurements and explain lessons, tradeoffs, and limitations.
+
+\section{At 100 Times the Data}
+% 1 mark.
+
+\subsection{What Breaks First}
+% Identify the first bottleneck and explain why it would fail at this scale.
+
+\subsection{What We Would Change}
+% Explain the changes needed to address the bottleneck.
+
+\section{Contributions and AI Acknowledgement}
+% 1 mark.
+
+\subsection{Contribution Table}
+% Add one row for each team member and describe who did what.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Team contributions.}
+    \begin{tabularx}{\linewidth}{@{}lX@{}}
+        \toprule
+        Team member & Contributions \\
+        \midrule
+        & \\
+        & \\
+        & \\
+        & \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\subsection{AI Acknowledgement}
+% Name each AI tool or outside-code source and state what it was used for,
+% as required by the project outline. Include assistance with this template.
+
+% Optional appendix: uncomment only if needed.
+% Keep the main report within eight pages.
+% \clearpage
+% \appendix
+% \section{Supporting Material}
+% Add supplementary outputs, logs, queries, or measurement details.
+
+\end{document}

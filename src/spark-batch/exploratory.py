@@ -21,3 +21,13 @@ def highest_measurements(df: DataFrame, limit: int = 10) -> DataFrame:
         .orderBy(F.col("pm25").desc())
         .limit(limit)
     )
+
+def states_measurements(df: DataFrame) -> DataFrame:
+    return(
+        df.groupBy(
+            "state_code",
+            "state_name"
+        ).count().orderBy(
+            "state_name"
+        )
+    )

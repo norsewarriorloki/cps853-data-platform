@@ -116,6 +116,7 @@ Local development can run the Spark job independently using `docker compose run 
 - [ ] Define Gold table names, keys, indexes, and before/after query timing method.
 - [ ] Add automated input download later, while satisfying the ≤3-command README requirement.
 - [ ] Pin tested library/image versions once the Docker builds work.
+- [ ] Create a second job for spark to answer questions and write to the SQL database
 
 ## Decision changes
 
