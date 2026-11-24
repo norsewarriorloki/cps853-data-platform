@@ -72,20 +72,21 @@ services:
     environment:
       PGHOST: postgres
       PGPORT: "5432"
-      POSTGRES_DB: gold_layer_pm25
-      POSTGRES_USER: bigdata24/7
-      POSTGRES_PASSWORD: BigDataAllDay
+      PGDATABASE: gold_layer_pm25
+      PGUSER: "bigdata24/7"
+      PGPASSWORD: BigDataAllDay
 
     volumes:
       - ./sql:/sql:ro
 
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      for file in /sql/[0-9][0-9][0-9]_*.sql; do
-        [ -f "$$file" ] || continue
-        echo "Applying $$file"
-        psql -X -v ON_ERROR_STOP=1 --single-transaction -f "$$file"
-      done
+    command: 
+      - |
+        for file in /sql/[0-9][0-9][0-9]_*.sql; do
+          [ -f "$$file" ] || continue
+          echo "Applying $$file"
+          psql -X -v ON_ERROR_STOP=1 --single-transaction -f "$$file"
+        done
   
   kafka-init:
     image: apache/kafka:4.1.2
@@ -104,6 +105,34 @@ services:
         --topic pm25-hourly \
         --partitions 3 \
         --replication-factor 1
+  dimension-loader:
+    build:
+      context: .
+      dockerfile: docker/python/Dockerfile
+
+    profiles: ["pipeline"]
+    restart: "no"
+
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+    working_dir: /app
+
+    environment:
+      PARQUET_GLOB: /app/data/silver/pm25_hourly/*.parquet
+      PYTHONPATH: /app
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: gold_layer_pm25
+      PGUSER: bigdata24/7
+      PGPASSWORD: BigDataAllDay
+
+    volumes:
+      - ./data/silver:/app/data/silver:ro
+      - ./src:/app/src:ro
+
+    command: ["python", "-m", "src.database.load_dimensions"]
   
   spark-batch:
     build:
@@ -112,16 +141,7 @@ services:
     group_add:
       - "1000"
     profiles: ["pipeline"]
-    restart: no
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: gold_layer_pm25
-      POSTGRES_USER: bigdata24/7
-      POSTGRES_PASSWORD: BigDataAllDay
+    restart: "no"
     volumes:
       - ./data:/app/data
       - ./src:/app/src:ro
@@ -133,35 +153,104 @@ services:
       - 2g
       - --conf
       - spark.sql.shuffle.partitions=8
-      - /app/src/spark-batch/job.py 
+      - /app/src/spark-batch/job.py
+  spark-gold:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+
+    profiles: ["pipeline"]
+    restart: "no"
+
+    depends_on:
+      spark-batch:
+        condition: service_completed_successfully
+      db-init:
+        condition: service_completed_successfully
+
+    environment:
+      SILVER_PARQUET_PATH: /app/data/silver/pm25_hourly
+
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: gold_layer_pm25
+      PGUSER: "bigdata24/7"
+      PGPASSWORD: BigDataAllDay
+
+    volumes:
+      - ./data/silver:/app/data/silver:ro
+      - ./src:/app/src:ro
+
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[2]
+      - --driver-memory
+      - 2g
+      - --conf
+      - spark.sql.shuffle.partitions=8
+      - --conf
+      - spark.jars.ivy=/tmp
+      - --packages
+      - org.postgresql:postgresql:42.7.14
+      - /app/src/spark-gold/job.py
   
   consumer:
     build:
       context: .
-      dockerfile: docker/python/Dockerfile
+      dockerfile: docker/spark/Dockerfile
+
     profiles: ["pipeline"]
-    restart: unless-stopped
+    restart: "no"
+
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
       db-init:
         condition: service_completed_successfully
-    working_dir: /app
+      spark-checkpoint-init:
+        condition: service_completed_successfully
+
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: pm25-hourly
-      KAFKA_GROUP_ID: pm25-rolling-consumer
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: gold_layer_pm25
-      POSTGRES_USER: bigdata24/7
-      POSTGRES_PASSWORD: BigDataAllDay
-      PYTHONPATH: /app
+
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: gold_layer_pm25
+      PGUSER: "bigdata24/7"
+      PGPASSWORD: BigDataAllDay
+
     volumes:
       - ./src:/app/src:ro
-    command: ["python", "-m", "src.kafka-streaming.consumer"]
+      - spark_checkpoints:/app/checkpoints
+
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[2]
+      - --driver-memory
+      - 2g
+      - --conf
+      - spark.sql.shuffle.partitions=8
+      - --conf
+      - spark.jars.ivy=/tmp
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.1
+      - /app/src/kafka-streaming/consumer.py
+  spark-checkpoint-init:
+    image: alpine:3.20
+    user: "0:0"
+    profiles: ["pipeline"]
+    restart: "no"
+
+    volumes:
+      - spark_checkpoints:/app/checkpoints
+
+    command:
+      - sh
+      - -c
+      - "chown -R 185:185 /app/checkpoints"
     
   producer:
       build:
@@ -174,8 +263,6 @@ services:
           condition: service_completed_successfully
         kafka-init:
           condition: service_completed_successfully
-        consumer:
-          condition: service_started
       working_dir: /app
       environment:
         KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -192,6 +279,7 @@ services:
 volumes:
   kafka_data:
   postgres_data:
+  spark_checkpoints:
 
 
 
