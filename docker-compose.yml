@@ -221,6 +221,12 @@ services:
       PGUSER: "bigdata24/7"
       PGPASSWORD: BigDataAllDay
 
+      ENABLE_ROLLING: "true"
+      PUBLISH_GOLD: "true"
+
+      CHECKPOINT_LOCATION: /app/checkpoints/invalid_events
+      ROLLING_CHECKPOINT_LOCATION: /app/checkpoints/rolling_24h_v2
+
     volumes:
       - ./src:/app/src:ro
       - spark_checkpoints:/app/checkpoints
@@ -230,7 +236,7 @@ services:
       - --master
       - local[2]
       - --driver-memory
-      - 2g
+      - 4g
       - --conf
       - spark.sql.shuffle.partitions=8
       - --conf

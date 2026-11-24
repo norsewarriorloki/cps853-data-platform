@@ -77,14 +77,14 @@ jdbc_properties = {
 annual_db_df.write.jdbc(
     url=jdbc_url,
     table="stg_state_annual_pm25",
-    mode="overwrite",
+    mode="append",
     properties=jdbc_properties
 )
 
 daily_db_df.write.jdbc(
     url=jdbc_url,
     table="stg_county_daily_pm25",
-    mode="overwrite",
+    mode="append",
     properties=jdbc_properties
 )
 
