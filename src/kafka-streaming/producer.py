@@ -20,10 +20,14 @@ def delivery_report(err, msg):
     global delivered_count
     if err is not None:
         failed_count += 1
-        print(f"Delivery failed: {err}")
+        if failed_count <= 3:
+            print(f"[producer] Delivery failed: {err}", flush=True)
     else:
         delivered_count += 1
 
+print(f"[producer] Input: Silver Parquet -> {PARQUET_GLOB}", flush=True)
+print(f"[producer] Process: replay observations in UTC time order; event limit: {MAX_EVENTS or 'all'}", flush=True)
+print(f"[producer] Destination: Kafka {os.environ['KAFKA_BOOTSTRAP_SERVERS']} -> topic {os.environ['KAFKA_TOPIC']}", flush=True)
 conn = duckdb.connect()
 producer = Producer({
     "bootstrap.servers": os.environ["KAFKA_BOOTSTRAP_SERVERS"]
@@ -50,8 +54,8 @@ while True:
     if not rows:
         break
 
-    if submitted_count % 100000 == 0:
-        print(f"Submitted {submitted_count:,} messages")
+    if submitted_count and submitted_count % 100000 == 0:
+        print(f"[producer] Submitted {submitted_count:,} messages", flush=True)
 
     for row in rows:
         event = dict(zip(EVENT_COLUMNS,row))
@@ -64,6 +68,8 @@ while True:
         # Construct kafka key and message from event data
         message = json.dumps(event).encode("utf-8")
         key = f'{event["state_code"]}:{event["county_code"]}'
+        if submitted_count == 0:
+            print(f"[producer] Example: key={key} | JSON={message.decode('utf-8')}", flush=True)
         while True:
             try:
                 # Add a message to the broker 
@@ -84,10 +90,9 @@ while True:
 
 remaining = producer.flush(60)
 
+print(f"[producer] Delivery summary: {delivered_count:,} / {submitted_count:,} acknowledged; failed {failed_count:,}; pending {remaining:,}", flush=True)
+
 if remaining > 0 or failed_count > 0 or delivered_count != submitted_count:
     raise RuntimeError("Kafka producer did not deliver all messages")
 
-print(f"Delivered messages: {delivered_count}")
-print(f"Submitted messages: {submitted_count}")
-print(f"Failed messages: {failed_count}")
-print(f"Undelivered messages: {remaining}")
+print(f"[producer] Output: {delivered_count:,} JSON events delivered to Kafka topic {os.environ['KAFKA_TOPIC']}", flush=True)

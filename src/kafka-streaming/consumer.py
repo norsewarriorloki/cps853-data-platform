@@ -82,8 +82,9 @@ def write_invalid_batch(df, batch_id):
     ) as conn:
         with conn.cursor() as cursor:
             cursor.executemany(query, rows)
+            inserted = cursor.rowcount
 
-    print(f"[Quarantine] Batch {batch_id} committed successfully", flush=True)
+    print(f"[quarantine] Batch {batch_id} output: {inserted:,} new invalid events -> PostgreSQL invalid_kafka_events (raw payload + rejection reasons)", flush=True)
 
 def write_rolling_batch(df, batch_id):
 
@@ -133,8 +134,9 @@ def write_rolling_batch(df, batch_id):
     ) as conn:
         with conn.cursor() as cursor:
             cursor.executemany(query, rows)
+            written = cursor.rowcount
 
-    print(f"[Rolling] Batch {batch_id} committed", flush=True)
+    print(f"[rolling] Batch {batch_id} output: {written:,} county-window rows inserted/updated -> PostgreSQL stg_county_rolling_24h", flush=True)
 
 def publish_rolling_max():
 
@@ -196,7 +198,19 @@ def publish_rolling_max():
 
             published = cursor.rowcount
 
-    print(f"[Gold] Published {published} county maxima", flush=True)
+    print(f"[gold] Output: {published:,} county maxima -> PostgreSQL county_rolling_24h_max (highest complete 24-hour average per county)", flush=True)
+
+print(f"[consumer] Input: Kafka {os.environ['KAFKA_BOOTSTRAP_SERVERS']} -> topic {os.environ['KAFKA_TOPIC']} (JSON observations)", flush=True)
+print(f"[consumer] Process: validate event schema; route invalid payloads -> PostgreSQL {os.environ['PGDATABASE']}.invalid_kafka_events", flush=True)
+if ENABLE_ROLLING:
+    print("[consumer] Process: valid observations -> county 24-hour averages, sliding hourly; require all 24 hours", flush=True)
+    print("[consumer] Destination: PostgreSQL stg_county_rolling_24h; incomplete windows are excluded", flush=True)
+else:
+    print("[consumer] Rolling aggregation disabled; valid events are not aggregated in this run", flush=True)
+print(f"[consumer] Gold publication: {'enabled -> county_rolling_24h_max' if PUBLISH_GOLD else 'disabled'}", flush=True)
+print(f"[consumer] Resume state: {os.getenv('CHECKPOINT_LOCATION', '/app/checkpoints/invalid_events')}", flush=True)
+if ENABLE_ROLLING:
+    print(f"[consumer] Rolling resume state: {os.getenv('ROLLING_CHECKPOINT_LOCATION', '/app/checkpoints/rolling_24h_v2')}", flush=True)
 
 spark = (
     SparkSession.builder
@@ -333,6 +347,8 @@ if PUBLISH_GOLD:
     if not ENABLE_ROLLING:
         raise ValueError("Cannot publish Gold with rolling aggregation disabled")
 
+    print("[gold] Input: stg_county_rolling_24h for this Kafka topic; select maximum average per county", flush=True)
     publish_rolling_max()
 
 spark.stop()
+print("[consumer] All available events processed; checkpoints saved", flush=True)

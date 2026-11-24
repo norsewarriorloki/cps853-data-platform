@@ -3,6 +3,8 @@ from pyspark.sql import functions as F
 import psycopg
 import os 
 
+print(f"[gold] Input: Silver Parquet -> {os.environ['SILVER_PARQUET_PATH']}", flush=True)
+print("[gold] Process: average monitor-hour PM2.5 by state/year and county/local day", flush=True)
 spark = SparkSession.builder.appName("PM25-Gold").getOrCreate()
 spark.sparkContext.setLogLevel("ERROR")
 
@@ -20,10 +22,6 @@ state_annual_df = silver_df.groupBy(
     F.count("*").alias("measurement_count")
 ).withColumn("year", F.lit(2024))
 
-state_annual_df.orderBy(
-    F.desc("avg_pm25")
-).show(10, truncate=False)
-
 # Question 2: What were the the worst days of air pollution in the United States in 2024 and what regions did they belong to?
 
 county_daily_df = silver_df.groupBy(
@@ -36,12 +34,6 @@ county_daily_df = silver_df.groupBy(
     F.avg("pm25").alias("avg_pm25"),
     F.count("*").alias("measurement_count")
 )
-
-county_daily_df.orderBy(
-    F.desc("avg_pm25")
-).show(25, truncate=False)
-
-print("County-day aggregates:", county_daily_df.count())
 
 # Load results into database for persistent storage 
 
@@ -72,6 +64,8 @@ jdbc_properties = {
     "batchsize": "1000"
 }
 
+print(f"[gold] Writing aggregates -> PostgreSQL {os.environ['PGDATABASE']}: stg_state_annual_pm25, stg_county_daily_pm25", flush=True)
+
 # WRITE RESULTS TO A STAGING TABLE FIRST 
 
 annual_db_df.write.jdbc(
@@ -87,6 +81,8 @@ daily_db_df.write.jdbc(
     mode="append",
     properties=jdbc_properties
 )
+
+print("[gold] Publishing batch aggregates", flush=True)
 
 with psycopg.connect(
     host=os.environ["PGHOST"],
@@ -121,4 +117,6 @@ with psycopg.connect(
         """)
         county_rows = cursor.rowcount
 
-print(f"Gold published: {state_rows} states, {county_rows} county-days")
+print(f"[gold] Output: state_annual_pm25 -> {state_rows:,} state-year rows", flush=True)
+print(f"[gold] Output: county_daily_pm25 -> {county_rows:,} county-day rows (average PM2.5 + measurement count)", flush=True)
+spark.stop()

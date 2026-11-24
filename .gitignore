@@ -18,6 +18,7 @@ data/rejected/
 # Spark
 .sparkStaging/
 spark-warehouse/
+.logs/
 
 # System
 .DS_Store

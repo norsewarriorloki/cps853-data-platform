@@ -88,7 +88,7 @@ GOLD_BEFORE=$(docker compose run --rm --no-deps -T \
     -c "SELECT COUNT(*) FROM county_rolling_24h_max;")
 
 # Process test topic using small micro-batches
-docker compose run --rm --no-deps -T \
+python3 scripts/run_stage.py validation-consumer docker compose run --rm --no-deps -T \
     -e KAFKA_TOPIC="$TOPIC" \
     -e ENABLE_ROLLING=true \
     -e PUBLISH_GOLD=false \

@@ -145,6 +145,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
     command:
       - /opt/spark/bin/spark-submit
       - --master

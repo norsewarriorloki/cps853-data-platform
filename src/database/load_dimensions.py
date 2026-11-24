@@ -4,6 +4,9 @@ import os
 
 PARQUET_GLOB = os.environ["PARQUET_GLOB"]
 
+print(f"[dimensions] Input: Silver Parquet -> {PARQUET_GLOB}", flush=True)
+print("[dimensions] Process: select distinct state/county IDs and names; insert or update lookup tables", flush=True)
+
 duckdb_conn = duckdb.connect()
 
 county_dimensions_query = """
@@ -37,3 +40,5 @@ with psycopg.connect() as pg_conn:
     with pg_conn.cursor() as cursor:
         cursor.executemany(insert_states, state_rows)
         cursor.executemany(insert_counties, county_rows)
+
+print(f"[dimensions] Output: PostgreSQL {os.environ['PGDATABASE']} -> dim_state ({len(state_rows):,} states), dim_county ({len(county_rows):,} counties)", flush=True)
