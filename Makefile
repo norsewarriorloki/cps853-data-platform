@@ -14,7 +14,7 @@ SERVICE ?=
 
 .PHONY: help build infra init db-init kafka-init checkpoints silver dimensions gold \
         produce consume batch stream pipeline answers test-invalid test-rolling \
-        status logs down clean postgres-ready kafka-ready test-validation test-quality
+        status logs down clean postgres-ready kafka-ready test-validation test-quality test-consumer-sinks
 
 help: ## Show commands and configurable options (default)
 	@awk 'BEGIN {FS = ":.*## "; print "Usage: make <target> [VARIABLE=value]\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-18s %s\n", $$1, $$2}' $(firstword $(MAKEFILE_LIST))
@@ -77,7 +77,13 @@ test-validation: ## Run synthetic batch validation tests (no dataset or services
 		--conf spark.ui.enabled=false --conf spark.ui.showConsoleProgress=false \
 		/app/tests/test_batch_validation.py
 
-test-quality: test-validation test-invalid ## Run batch and streaming validation suites
+test-consumer-sinks: postgres-ready ## Test COPY transactions, replay, rollback, and cache cleanup
+	@$(RUN_STAGE) $@ $(COMPOSE) run --rm --no-deps -T \
+		--volume "$(CURDIR)/tests:/app/tests:ro" \
+		--entrypoint /opt/spark/bin/spark-submit consumer \
+		--master 'local[2]' /app/tests/test_consumer_sinks.py
+
+test-quality: test-validation test-consumer-sinks test-invalid ## Run batch, sink transaction, and streaming validation suites
 
 test-invalid: ## Test streaming quarantine cases and replay idempotence
 	@bash tests/test_invalid_stream.sh

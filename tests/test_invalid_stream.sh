@@ -94,6 +94,9 @@ import sys
 
 root = Path(sys.argv[1])
 cases = json.loads((root / "expected.json").read_text())
+sys.path.insert(0, str(Path("tests").resolve()))
+from table_output import print_table
+
 failures = 0
 checks = 0
 
@@ -127,6 +130,31 @@ for phase in ["initial", "replay"]:
 
 check("replay preserves existing records and rejection timestamps",
       snapshots["initial"] == snapshots["replay"], snapshots["initial"], snapshots["replay"])
+
+# These are database query results, not the expected test fixtures.
+rows = snapshots["replay"]
+print(f"\nPostgreSQL quarantine results: invalid_kafka_events ({len(rows)} rows for this test topic)")
+print("Showing up to 6 persisted records after replay; valid controls are excluded.")
+preview = rows if len(rows) <= 6 else rows[:4] + rows[-2:]
+records = []
+for row in preview:
+    offset = row["message_offset"]
+    name = cases[offset]["name"] if 0 <= offset < len(cases) else "unexpected offset"
+    raw = bytes.fromhex(row["payload_hex"]).decode("utf-8", errors="replace")
+    records.append([offset, name, raw, row["rejection_reasons"]])
+print_table(
+    ["Offset", "Test case", "Raw message (stored)", "Rejection reasons"],
+    records, [6, 20, 60, 18],
+)
+print("\nPostgreSQL record metadata (same offsets as the table above)")
+print_table(
+    ["Offset", "Partition", "Rejected at (UTC)"],
+    [[row["message_offset"], row["partition_id"], row["rejected_at"]] for row in preview],
+    [6, 9, 32],
+)
+if not rows:
+    print("  No quarantined records were returned.")
+
 print(f"\nStreaming validation: {checks - failures} passed, {failures} failed")
 sys.exit(1 if failures else 0)
 PY

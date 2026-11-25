@@ -1,7 +1,20 @@
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from contextlib import redirect_stdout
+import io
 import psycopg
 import os 
+
+
+def show_answer(df, title, rows):
+    """Display a real Spark DataFrame table through the quiet stage runner."""
+    print(f"[gold] {title}", flush=True)
+    output = io.StringIO()
+    with redirect_stdout(output):
+        df.show(rows, truncate=False)
+    for line in output.getvalue().splitlines():
+        print(f"[gold] {line}", flush=True)
+
 
 print(f"[gold] Input: Silver Parquet -> {os.environ['SILVER_PARQUET_PATH']}", flush=True)
 print("[gold] Process: average monitor-hour PM2.5 by state/year and county/local day", flush=True)
@@ -20,7 +33,15 @@ state_annual_df = silver_df.groupBy(
 ).agg(
     F.avg("pm25").alias("avg_pm25"),
     F.count("*").alias("measurement_count")
-).withColumn("year", F.lit(2024))
+).withColumn("year", F.lit(2024)).persist()
+
+show_answer(
+    state_annual_df.select(
+        "state_code", "state_name", "year", "avg_pm25", "measurement_count"
+    ).orderBy(F.desc("avg_pm25"), "state_code"),
+    "Question 1: Top 10 states by average PM2.5 in 2024 (Spark DataFrame)",
+    10,
+)
 
 # Question 2: What were the the worst days of air pollution in the United States in 2024 and what regions did they belong to?
 
@@ -33,6 +54,14 @@ county_daily_df = silver_df.groupBy(
 ).agg(
     F.avg("pm25").alias("avg_pm25"),
     F.count("*").alias("measurement_count")
+).persist()
+
+show_answer(
+    county_daily_df.orderBy(
+        F.desc("avg_pm25"), "state_code", "county_code", "local_date"
+    ),
+    "Question 2: Top 25 worst county-days by average PM2.5 in 2024 (Spark DataFrame)",
+    25,
 )
 
 # Load results into database for persistent storage 
@@ -119,4 +148,6 @@ with psycopg.connect(
 
 print(f"[gold] Output: state_annual_pm25 -> {state_rows:,} state-year rows", flush=True)
 print(f"[gold] Output: county_daily_pm25 -> {county_rows:,} county-day rows (average PM2.5 + measurement count)", flush=True)
+state_annual_df.unpersist()
+county_daily_df.unpersist()
 spark.stop()

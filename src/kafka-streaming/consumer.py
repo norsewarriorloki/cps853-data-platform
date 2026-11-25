@@ -45,98 +45,136 @@ def validate_event(df):
     )
 
 def write_invalid_batch(df, batch_id):
+    # isEmpty() and the COPY iterator reuse the same materialized batch.
+    df.persist()
+    try:
+        if df.isEmpty():
+            return
 
-    if df.isEmpty():
-        return
+        query = """
+            INSERT INTO invalid_kafka_events (
+                topic,
+                partition_id,
+                message_offset,
+                raw_message,
+                rejection_reasons
+            )
+            SELECT topic, partition_id, message_offset, raw_message, rejection_reasons
+            FROM batch_invalid_events
+            WHERE true
+            ON CONFLICT (topic, partition_id, message_offset)
+            DO NOTHING;
+        """
 
-    query = """
-        INSERT INTO invalid_kafka_events (
-            topic,
-            partition_id,
-            message_offset,
-            raw_message,
-            rejection_reasons
+        rows = (
+            (
+                row["topic"],
+                row["partition_id"],
+                row["message_offset"],
+                bytes(row["raw_message"]) if row["raw_message"] is not None else None,
+                row["rejection_reasons"]
+            )
+            for row in df.toLocalIterator()
         )
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (topic, partition_id, message_offset)
-        DO NOTHING;
-    """
 
-    rows = (
-        (
-            row["topic"],
-            row["partition_id"],
-            row["message_offset"],
-            bytes(row["raw_message"]) if row["raw_message"] is not None else None,
-            row["rejection_reasons"]
-        )
-        for row in df.toLocalIterator()
-    )
+        with psycopg.connect(
+            host=os.environ["PGHOST"],
+            port=os.environ.get("PGPORT", "5432"),
+            dbname=os.environ["PGDATABASE"],
+            user=os.environ["PGUSER"],
+            password=os.environ["PGPASSWORD"]
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TEMP TABLE batch_invalid_events ON COMMIT DROP AS
+                    SELECT topic, partition_id, message_offset, raw_message, rejection_reasons
+                    FROM invalid_kafka_events WITH NO DATA
+                """)
+                with cursor.copy("""
+                    COPY batch_invalid_events (
+                        topic, partition_id, message_offset, raw_message, rejection_reasons
+                    ) FROM STDIN
+                """) as copy:
+                    for row in rows:
+                        copy.write_row(row)
+                cursor.execute(query)
+                inserted = cursor.rowcount
 
-    with psycopg.connect(
-        host=os.environ["PGHOST"],
-        port=os.environ.get("PGPORT", "5432"),
-        dbname=os.environ["PGDATABASE"],
-        user=os.environ["PGUSER"],
-        password=os.environ["PGPASSWORD"]
-    ) as conn:
-        with conn.cursor() as cursor:
-            cursor.executemany(query, rows)
-            inserted = cursor.rowcount
-
-    print(f"[quarantine] Batch {batch_id} output: {inserted:,} new invalid events -> PostgreSQL invalid_kafka_events (raw payload + rejection reasons)", flush=True)
+        print(f"[quarantine] Batch {batch_id} output: {inserted:,} new invalid events -> PostgreSQL invalid_kafka_events (raw payload + rejection reasons)", flush=True)
+    finally:
+        df.unpersist()
 
 def write_rolling_batch(df, batch_id):
+    # isEmpty() and the COPY iterator reuse the same materialized batch.
+    df.persist()
+    try:
+        if df.isEmpty():
+            return
 
-    if df.isEmpty():
-        return
+        query = """
+            INSERT INTO stg_county_rolling_24h (
+                source_topic,
+                state_code,
+                county_code,
+                window_end_utc,
+                avg_pm25,
+                measurement_count
+            )
+            SELECT source_topic, state_code, county_code, window_end_utc,
+                   avg_pm25, measurement_count
+            FROM batch_rolling_24h
+            WHERE true
+            ON CONFLICT (
+                source_topic,
+                state_code,
+                county_code,
+                window_end_utc
+            )
+            DO UPDATE SET
+                avg_pm25 = EXCLUDED.avg_pm25,
+                measurement_count = EXCLUDED.measurement_count;
+        """
 
-    query = """
-        INSERT INTO stg_county_rolling_24h (
-            source_topic,
-            state_code,
-            county_code,
-            window_end_utc,
-            avg_pm25,
-            measurement_count
+        rows = (
+            (
+                row["source_topic"],
+                row["state_code"],
+                row["county_code"],
+                row["window_end_utc"],
+                row["avg_pm25"],
+                row["measurement_count"]
+            )
+            for row in df.toLocalIterator()
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
 
-        ON CONFLICT (
-            source_topic,
-            state_code,
-            county_code,
-            window_end_utc
-        )
-        DO UPDATE SET
-            avg_pm25 = EXCLUDED.avg_pm25,
-            measurement_count = EXCLUDED.measurement_count;
-    """
+        with psycopg.connect(
+            host=os.environ["PGHOST"],
+            port=os.environ.get("PGPORT", "5432"),
+            dbname=os.environ["PGDATABASE"],
+            user=os.environ["PGUSER"],
+            password=os.environ["PGPASSWORD"]
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TEMP TABLE batch_rolling_24h ON COMMIT DROP AS
+                    SELECT source_topic, state_code, county_code, window_end_utc,
+                           avg_pm25, measurement_count
+                    FROM stg_county_rolling_24h WITH NO DATA
+                """)
+                with cursor.copy("""
+                    COPY batch_rolling_24h (
+                        source_topic, state_code, county_code, window_end_utc,
+                        avg_pm25, measurement_count
+                    ) FROM STDIN
+                """) as copy:
+                    for row in rows:
+                        copy.write_row(row)
+                cursor.execute(query)
+                written = cursor.rowcount
 
-    rows = (
-        (
-            row["source_topic"],
-            row["state_code"],
-            row["county_code"],
-            row["window_end_utc"],
-            row["avg_pm25"],
-            row["measurement_count"]
-        )
-        for row in df.toLocalIterator()
-    )
-
-    with psycopg.connect(
-        host=os.environ["PGHOST"],
-        port=os.environ.get("PGPORT", "5432"),
-        dbname=os.environ["PGDATABASE"],
-        user=os.environ["PGUSER"],
-        password=os.environ["PGPASSWORD"]
-    ) as conn:
-        with conn.cursor() as cursor:
-            cursor.executemany(query, rows)
-            written = cursor.rowcount
-
-    print(f"[rolling] Batch {batch_id} output: {written:,} county-window rows inserted/updated -> PostgreSQL stg_county_rolling_24h", flush=True)
+        print(f"[rolling] Batch {batch_id} output: {written:,} county-window rows inserted/updated -> PostgreSQL stg_county_rolling_24h", flush=True)
+    finally:
+        df.unpersist()
 
 def publish_rolling_max():
 
@@ -200,155 +238,160 @@ def publish_rolling_max():
 
     print(f"[gold] Output: {published:,} county maxima -> PostgreSQL county_rolling_24h_max (highest complete 24-hour average per county)", flush=True)
 
-print(f"[consumer] Input: Kafka {os.environ['KAFKA_BOOTSTRAP_SERVERS']} -> topic {os.environ['KAFKA_TOPIC']} (JSON observations)", flush=True)
-print(f"[consumer] Process: validate event schema; route invalid payloads -> PostgreSQL {os.environ['PGDATABASE']}.invalid_kafka_events", flush=True)
-if ENABLE_ROLLING:
-    print("[consumer] Process: valid observations -> county 24-hour averages, sliding hourly; require all 24 hours", flush=True)
-    print("[consumer] Destination: PostgreSQL stg_county_rolling_24h; incomplete windows are excluded", flush=True)
-else:
-    print("[consumer] Rolling aggregation disabled; valid events are not aggregated in this run", flush=True)
-print(f"[consumer] Gold publication: {'enabled -> county_rolling_24h_max' if PUBLISH_GOLD else 'disabled'}", flush=True)
-print(f"[consumer] Resume state: {os.getenv('CHECKPOINT_LOCATION', '/app/checkpoints/invalid_events')}", flush=True)
-if ENABLE_ROLLING:
-    print(f"[consumer] Rolling resume state: {os.getenv('ROLLING_CHECKPOINT_LOCATION', '/app/checkpoints/rolling_24h_v2')}", flush=True)
+def main():
+    print(f"[consumer] Input: Kafka {os.environ['KAFKA_BOOTSTRAP_SERVERS']} -> topic {os.environ['KAFKA_TOPIC']} (JSON observations)", flush=True)
+    print(f"[consumer] Process: validate event schema; route invalid payloads -> PostgreSQL {os.environ['PGDATABASE']}.invalid_kafka_events", flush=True)
+    if ENABLE_ROLLING:
+        print("[consumer] Process: valid observations -> county 24-hour averages, sliding hourly; require all 24 hours", flush=True)
+        print("[consumer] Destination: PostgreSQL stg_county_rolling_24h; incomplete windows are excluded", flush=True)
+    else:
+        print("[consumer] Rolling aggregation disabled; valid events are not aggregated in this run", flush=True)
+    print(f"[consumer] Gold publication: {'enabled -> county_rolling_24h_max' if PUBLISH_GOLD else 'disabled'}", flush=True)
+    print(f"[consumer] Resume state: {os.getenv('CHECKPOINT_LOCATION', '/app/checkpoints/invalid_events')}", flush=True)
+    if ENABLE_ROLLING:
+        print(f"[consumer] Rolling resume state: {os.getenv('ROLLING_CHECKPOINT_LOCATION', '/app/checkpoints/rolling_24h_v2')}", flush=True)
 
-spark = (
-    SparkSession.builder
-    .appName("PM25-Streaming")
-    .config("spark.sql.session.timeZone", "UTC")
-    .getOrCreate()
-)
-spark.sparkContext.setLogLevel("ERROR")
-
-kafka_df = (
-    spark.readStream
-    .format("kafka")
-    .option("kafka.bootstrap.servers", os.environ["KAFKA_BOOTSTRAP_SERVERS"])
-    .option("subscribe", os.environ["KAFKA_TOPIC"])
-    .option("startingOffsets", "earliest")
-    .option(
-        "maxOffsetsPerTrigger",
-        int(os.getenv("MAX_OFFSETS_PER_TRIGGER", "200000"))
+    spark = (
+        SparkSession.builder
+        .appName("PM25-Streaming")
+        .config("spark.sql.session.timeZone", "UTC")
+        .getOrCreate()
     )
-    .load()
-)
+    spark.sparkContext.setLogLevel("ERROR")
 
-parsed_df = kafka_df.select(
-    "topic",
-    "partition",
-    "offset",
-    F.col("key").cast("string").alias("kafka_key"),
-    F.col("value").alias("raw_message"),
-    F.from_json(
-        F.col("value").cast("string"),
-        EVENT_SCHEMA
-    ).alias("event")
-)
-
-validated_df = validate_event(parsed_df)
-
-valid_df = validated_df.filter(
-    ~F.col("is_invalid")
-)
-
-invalid_df = (
-    validated_df
-    .filter(F.col("is_invalid"))
-    .withColumn("rejection_reason", F.lit("INVALID_SCHEMA"))
-)
-
-quarantine_df = invalid_df.select(
-    F.col("topic"),
-    F.col("partition").alias("partition_id"),
-    F.col("offset").alias("message_offset"),
-    F.col("raw_message"),
-    F.array(F.col("rejection_reason")).alias("rejection_reasons")
-)
-
-valid_events_df = valid_df.select(
-    F.col("topic").alias("source_topic"),
-    F.col("event.state_code").alias("state_code"),
-    F.col("event.county_code").alias("county_code"),
-    F.col("event.event_time_utc").cast("timestamp").alias("event_time_utc"),
-    F.col("event.pm25").alias("pm25")
-)
-
-FULL_DAY_MASK = (1 << 24) - 1
-
-rolling_df = (
-    valid_events_df
-    .groupBy(
-        "source_topic",
-        "state_code",
-        "county_code",
-        F.window(
-            "event_time_utc",
-            "24 hours",
-            "1 hour"
-        ).alias("window")
+    kafka_df = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", os.environ["KAFKA_BOOTSTRAP_SERVERS"])
+        .option("subscribe", os.environ["KAFKA_TOPIC"])
+        .option("startingOffsets", "earliest")
+        .option(
+            "maxOffsetsPerTrigger",
+            int(os.getenv("MAX_OFFSETS_PER_TRIGGER", "200000"))
+        )
+        .load()
     )
-    .agg(
-        F.avg("pm25").alias("avg_pm25"),
-        F.count("pm25").alias("measurement_count"),
-        F.bit_or(
-            F.expr("1 << hour(event_time_utc)")
-        ).alias("hour_mask")
-    )
-    .filter(F.col("hour_mask") == FULL_DAY_MASK)
-    .select(
-        "source_topic",
-        "state_code",
-        "county_code",
-        F.col("window.end").alias("window_end_utc"),
-        "avg_pm25",
-        "measurement_count"
-    )
-)
 
-invalid_query = (
-    quarantine_df.writeStream
-    .foreachBatch(write_invalid_batch)
-    .outputMode("append")
-    .option(
-        "checkpointLocation",
-        os.getenv(
-            "CHECKPOINT_LOCATION",
-            "/app/checkpoints/invalid_events"
+    parsed_df = kafka_df.select(
+        "topic",
+        "partition",
+        "offset",
+        F.col("key").cast("string").alias("kafka_key"),
+        F.col("value").alias("raw_message"),
+        F.from_json(
+            F.col("value").cast("string"),
+            EVENT_SCHEMA
+        ).alias("event")
+    )
+
+    validated_df = validate_event(parsed_df)
+
+    valid_df = validated_df.filter(
+        ~F.col("is_invalid")
+    )
+
+    invalid_df = (
+        validated_df
+        .filter(F.col("is_invalid"))
+        .withColumn("rejection_reason", F.lit("INVALID_SCHEMA"))
+    )
+
+    quarantine_df = invalid_df.select(
+        F.col("topic"),
+        F.col("partition").alias("partition_id"),
+        F.col("offset").alias("message_offset"),
+        F.col("raw_message"),
+        F.array(F.col("rejection_reason")).alias("rejection_reasons")
+    )
+
+    valid_events_df = valid_df.select(
+        F.col("topic").alias("source_topic"),
+        F.col("event.state_code").alias("state_code"),
+        F.col("event.county_code").alias("county_code"),
+        F.col("event.event_time_utc").cast("timestamp").alias("event_time_utc"),
+        F.col("event.pm25").alias("pm25")
+    )
+
+    FULL_DAY_MASK = (1 << 24) - 1
+
+    rolling_df = (
+        valid_events_df
+        .groupBy(
+            "source_topic",
+            "state_code",
+            "county_code",
+            F.window(
+                "event_time_utc",
+                "24 hours",
+                "1 hour"
+            ).alias("window")
+        )
+        .agg(
+            F.avg("pm25").alias("avg_pm25"),
+            F.count("pm25").alias("measurement_count"),
+            F.bit_or(
+                F.expr("1 << hour(event_time_utc)")
+            ).alias("hour_mask")
+        )
+        .filter(F.col("hour_mask") == FULL_DAY_MASK)
+        .select(
+            "source_topic",
+            "state_code",
+            "county_code",
+            F.col("window.end").alias("window_end_utc"),
+            "avg_pm25",
+            "measurement_count"
         )
     )
-    .trigger(availableNow=True)
-    .start()
-)
 
-rolling_query = None
-
-if ENABLE_ROLLING:
-    rolling_query = (
-        rolling_df.writeStream
-        .foreachBatch(write_rolling_batch)
-        .outputMode("update")
+    invalid_query = (
+        quarantine_df.writeStream
+        .foreachBatch(write_invalid_batch)
+        .outputMode("append")
         .option(
             "checkpointLocation",
             os.getenv(
-                "ROLLING_CHECKPOINT_LOCATION",
-                "/app/checkpoints/rolling_24h_v2"
+                "CHECKPOINT_LOCATION",
+                "/app/checkpoints/invalid_events"
             )
         )
         .trigger(availableNow=True)
         .start()
     )
 
-invalid_query.awaitTermination()
+    rolling_query = None
 
-if rolling_query is not None:
-    rolling_query.awaitTermination()
+    if ENABLE_ROLLING:
+        rolling_query = (
+            rolling_df.writeStream
+            .foreachBatch(write_rolling_batch)
+            .outputMode("update")
+            .option(
+                "checkpointLocation",
+                os.getenv(
+                    "ROLLING_CHECKPOINT_LOCATION",
+                    "/app/checkpoints/rolling_24h_v2"
+                )
+            )
+            .trigger(availableNow=True)
+            .start()
+        )
 
-if PUBLISH_GOLD:
-    if not ENABLE_ROLLING:
-        raise ValueError("Cannot publish Gold with rolling aggregation disabled")
+    invalid_query.awaitTermination()
 
-    print("[gold] Input: stg_county_rolling_24h for this Kafka topic; select maximum average per county", flush=True)
-    publish_rolling_max()
+    if rolling_query is not None:
+        rolling_query.awaitTermination()
 
-spark.stop()
-print("[consumer] All available events processed; checkpoints saved", flush=True)
+    if PUBLISH_GOLD:
+        if not ENABLE_ROLLING:
+            raise ValueError("Cannot publish Gold with rolling aggregation disabled")
+
+        print("[gold] Input: stg_county_rolling_24h for this Kafka topic; select maximum average per county", flush=True)
+        publish_rolling_max()
+
+    spark.stop()
+    print("[consumer] All available events processed; checkpoints saved", flush=True)
+
+
+if __name__ == "__main__":
+    main()

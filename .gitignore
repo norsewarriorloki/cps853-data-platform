@@ -14,6 +14,7 @@ data/raw/
 data/silver/
 data/checkpoints/
 data/rejected/
+documentation/evidence/
 
 # Spark
 .sparkStaging/

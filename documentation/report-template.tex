@@ -4,12 +4,30 @@
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{tabularx}
+\usepackage{listings}
 \usepackage[hidelinks]{hyperref}
+
+\lstdefinestyle{evidence}{
+    basicstyle=\ttfamily\scriptsize,
+    frame=single,
+    breaklines=true,
+    breakatwhitespace=false,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    captionpos=b
+}
+% Support builds from either the repository root or documentation/.
+\IfFileExists{evidence/run-59ewk1/01-silver.txt}{
+    \newcommand{\evidenceroot}{evidence/run-59ewk1}
+}{
+    \newcommand{\evidenceroot}{documentation/evidence/run-59ewk1}
+}
 
 % Based on the Report requirements in Team_Project (4).pdf.
 % Main report: at most eight pages. An appendix is permitted if needed.
 % Submit the report PDF with the final code as a zip file.
-% Comments indicate what to add; no report content has been filled in.
+% Comments indicate the sections still to be completed.
 
 \title{CPS 853 Team Project Report}
 \author{} % Add team members' names.
@@ -43,8 +61,76 @@
 % and the three answers with measured database response times.
 
 \subsection{Part 1: Store and Batch}
-% Show evidence of the chosen storage format and working Spark batch job.
-% Include sample outputs for at least two of the user questions.
+The Spark batch job reads the raw hourly PM2.5 CSV, checks required fields,
+numeric values, timestamps, the 2024 date range, and duplicate measurement keys,
+then writes accepted observations and rejected records to separate Parquet
+datasets. In this captured run, all 8,139,551 input rows passed validation.
+The subsequent exclusion of state codes 72 and 80 is a separate filtering step;
+the validation count is therefore not the final Silver row count.
+
+\noindent\begin{minipage}{\linewidth}
+\lstinputlisting[
+    style=evidence,firstline=2,lastline=13,
+    caption={Captured Silver processing: CSV validation and Parquet outputs.},
+    label={lst:batch-silver}
+]{\evidenceroot/01-silver.txt}
+\end{minipage}
+
+
+State and county dimensions are loaded from Silver before publishing batch
+aggregates. The captured outputs show 51 state entries and 587 counties,
+followed by 51 state-year aggregates and 205,814 county-day aggregates saved
+to PostgreSQL.
+
+\noindent\begin{minipage}{\linewidth}
+\lstinputlisting[
+    style=evidence,firstline=8,lastline=12,
+    caption={Captured dimension loading from Silver into PostgreSQL.},
+    label={lst:batch-dimensions}
+]{\evidenceroot/02-dimensions.txt}
+\end{minipage}
+
+
+\noindent\begin{minipage}{\linewidth}
+\lstinputlisting[
+    style=evidence,firstline=8,lastline=15,
+    caption={Captured Spark Gold aggregation and database publication.},
+    label={lst:batch-gold}
+]{\evidenceroot/03-gold.txt}
+\end{minipage}
+
+
+The following result tables are database queries over the batch-produced Gold
+tables, captured by \texttt{make answers}. They show sample answers to the first
+two user questions. The accompanying times are individual query response times,
+not batch processing durations.
+% This run's Gold log predates the restored Spark DataFrame displays.
+% These listings are explicitly database results, not DataFrame console output.
+
+\paragraph{Question 1: Which states had the highest average PM2.5 in 2024?}
+Arkansas has the highest annual average in this output (11.09).
+
+\noindent\begin{minipage}{\linewidth}
+\lstinputlisting[
+    style=evidence,firstline=13,lastline=31,
+    caption={Top ten state-year averages queried from the batch Gold results.},
+    label={lst:batch-answer-states}
+]{\evidenceroot/06-answers.txt}
+\end{minipage}
+
+
+\paragraph{Question 2: Which county-days had the highest average PM2.5?}
+The highest county-day average shown is 217.32 for Fairbanks North Star,
+Alaska, on June 30, 2024.
+
+\noindent\begin{minipage}{\linewidth}
+\lstinputlisting[
+    style=evidence,firstline=34,lastline=52,
+    caption={Top ten county-day averages queried from the batch Gold results.},
+    label={lst:batch-answer-county-days}
+]{\evidenceroot/06-answers.txt}
+\end{minipage}
+
 
 \subsection{Part 2: Stream}
 % Show evidence of event-time-ordered Kafka replay and a running consumer result.

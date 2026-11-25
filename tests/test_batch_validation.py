@@ -3,9 +3,11 @@
 from collections import Counter
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 from pyspark.sql import SparkSession, functions as F
+from table_output import print_table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src/spark-batch"))
 from quality_checks import REQUIRED_FIELDS, split_valid_invalid
@@ -97,6 +99,7 @@ class BatchValidationTests(unittest.TestCase):
         rows = [(name, *(record[column] for column in BASE)) for name, record, _ in CASES]
         source = cls.spark.createDataFrame(rows, schema)
         valid, invalid = split_valid_invalid(source)
+        cls.quarantine = invalid.select("case_name", *BASE, "rejection_reasons")
         cls.results = (
             valid.withColumn("accepted", F.lit(True))
             .unionByName(invalid.withColumn("accepted", F.lit(False)))
@@ -107,6 +110,60 @@ class BatchValidationTests(unittest.TestCase):
     def test_partition_integrity(self):
         "Every input appears exactly once across accepted and rejected outputs."
         self.assertEqual(Counter(row.case_name for row in self.results), Counter(name for name, _, _ in CASES))
+
+    def test_quarantine_parquet_round_trip(self):
+        "Rejected rows retain raw fields and exact reasons after a Parquet round trip."
+        with tempfile.TemporaryDirectory(prefix="quarantine-validation-") as directory:
+            path = str(Path(directory) / "rejected")
+            self.quarantine.write.mode("overwrite").parquet(path)
+            restored = self.spark.read.parquet(path).collect()
+            expected = {
+                name: (record, reasons) for name, record, reasons in CASES if reasons
+            }
+            self.assertEqual(Counter(row.case_name for row in restored), Counter(expected.keys()))
+            for row in restored:
+                record, reasons = expected[row.case_name]
+                self.assertEqual({field: row[field] for field in BASE}, record)
+                self.assertEqual(set(row.rejection_reasons), reasons)
+
+            print(f"[validation] TEST quarantine Parquet: {len(restored)} rejected synthetic rows read back", flush=True)
+            print(f"[validation] Source: {path} (temporary test output; removed after the test)", flush=True)
+            examples = [
+                "null required field: Sample Measurement",
+                "invalid numeric Sample Measurement: abc",
+                "malformed Time Local: 24:00",
+                "local date outside 2024: 2023-12-31",
+                "duplicate group first member",
+                "multiple independent violations",
+            ]
+            by_name = {row.case_name: row for row in restored}
+            print_quarantine_preview([by_name[name] for name in examples], synthetic=True)
+
+        pipeline_path = Path("/app/data/rejected/pm25_hourly")
+        if pipeline_path.is_dir():
+            # Preview only a bounded sample; never rewrite the pipeline artifact.
+            fields = ["State Code", "County Code", "Site Num", "Sample Measurement",
+                      "Date Local", "Time Local", "rejection_reasons"]
+            sample = self.spark.read.parquet(str(pipeline_path)).select(*fields).limit(5).collect()
+            print(f"[validation] PIPELINE quarantine Parquet: {pipeline_path} (up to 5 existing rows)", flush=True)
+            print_quarantine_preview(sample)
+        else:
+            print("[validation] PIPELINE quarantine preview skipped: run make silver to create data/rejected/pm25_hourly", flush=True)
+
+
+def print_quarantine_preview(rows, synthetic=False):
+    if not rows:
+        print("[validation] No rejected rows found in this Parquet dataset", flush=True)
+    print_table(
+        ["Test case" if synthetic else "Row", "State", "County", "Site", "PM2.5",
+         "Local date", "Time", "Rejection reasons"],
+        [[row["case_name"] if synthetic else index,
+          row["State Code"], row["County Code"], row["Site Num"],
+          row["Sample Measurement"], row["Date Local"], row["Time Local"],
+          row["rejection_reasons"]] for index, row in enumerate(rows, 1)],
+        [24, 5, 6, 5, 8, 10, 5, 22],
+    )
+    print("[validation] <NULL> = missing value; <EMPTY> = empty string; quoted spaces = whitespace-only value", flush=True)
 
 
 def case_test(name, expected):
